@@ -82,7 +82,8 @@ to child `2n`, bit 1 to `2n+1`. A miss follows the bits from the root and flips 
 all-zero start it evicts way 0), and a hit points every parent on its path away from the accessed
 way.</sub>
 
-This costs `ways − 1` bits of state per set, and each update touches O(log ways) nodes. It follows
+The tree has `ways − 1` direction bits per set (`plru_tree` keeps them one per byte, in `ways`
+entries per set with index 0 unused), and each update touches O(log ways) nodes. It follows
 the specification exactly, including the rule that invalid ways are *not* preferred. The same
 `cachesim.{h,cc}` is dropped into Spike's source tree and reused by Parts 2 and 3.
 
@@ -100,7 +101,8 @@ into four 4×4 quadrants:
    its final place in `B`. **Park** the right half in `B`'s top-right quadrant, which is already in
    cache.
 2. For each of the four `B` rows, swap the parked values out to their final quadrant and bring in
-   `A`'s bottom-left column. Every line loaded from `B` is used completely before it can be evicted.
+   `A`'s bottom-left column. In blocks off the diagonal, every line of `A` and `B` is loaded only
+   once. Diagonal blocks, where `A` and `B` map to the same sets, take extra misses.
 3. Transpose the bottom-right quadrant directly.
 
 ![One 8×8 block of the blocked transpose in three steps, and the contents of one 2-way cache set as the steps run](docs/figures/transpose-quadrants.png)
@@ -110,9 +112,16 @@ snippet's accesses through a Python port of the Part 1 cache
 ([`make_transpose_figure.py`](docs/figures/make_transpose_figure.py)), which reproduces the miss
 counts in the table above.</sub>
 
-The `l = B[..][..]` reads are deliberate extra accesses. They **touch a line to steer the PLRU tree**,
-so the next miss evicts the line I have finished with rather than one I still need. This only
-works because I control the replacement policy from Part 1.
+The `l = B[..][..]` reads are deliberate extra accesses. They **touch a line to steer replacement**.
+In the 64×64 case, off the diagonal, each of the four reads in Step 2 makes the `B` row I still need
+the most recently used line in its set, so the next miss there evicts the row I have finished with
+(bottom half of the figure). A Python replay of the `cachesim.cc` policy
+([`make_transpose_figure.py`](docs/figures/make_transpose_figure.py), not a run of the C++
+simulator) shows that these four reads are the only ones that matter: without them the 64×64 count
+rises from 1,344 to 1,544 misses. The reads in Steps 1 and 3 do not change the count, and 32×32
+stays at 272 misses with or without any of them. With 2 ways, Tree-PLRU is the same as true LRU, so
+the trick needs a deterministic policy such as LRU or PLRU. It would not work with Spike's default
+random (LFSR) replacement.
 
 The code is restricted to the 12 provided scalar locals (`t0–t7, i, j, k, l`). No extra
 arrays or pointers are allowed.
@@ -124,16 +133,17 @@ The workload is a two-layer MLP (`784 → 128 → 10`, 300 samples) running on S
 
 [`matmul_improved.c`](3_mlp/matmul_improved.c):
 
-- **Vectorise along N.** Each `B[k][j : j+vl]` row segment is loaded once. It is broadcast-multiplied
-  into **four rows of C at the same time** with `vfmacc.vf`, so the 4 × `vl` output tile stays in
-  vector registers (`LMUL = 4`, 16 vregs).
-- **Loop tiling.** 16-row blocks of `A` and 16-deep blocks of `K` keep the active `B` strip resident
-  in a 4 KiB cache while it is reused across all 16 rows.
+- **Vectorise along N.** Each `B[k][j : j+vl]` row segment is loaded once per group of four `C` rows
+  and broadcast-multiplied into **all four rows at the same time** with `vfmacc.vf`, so the 4 × `vl`
+  output tile stays in vector registers (`LMUL = 4`, 16 vregs) for a whole 16-deep block of `K`.
+- **Loop tiling.** The loops are blocked into 16 rows of `A` and 16 values of `K`, so each 16 × `vl`
+  strip of `B` is reused by every row of the block before the loop moves on.
 - **Scalar-row tail loop** for `M % 4`.
 
 [`dc_config.py`](3_mlp/dc_config.py) picks the data-cache geometry. I chose **8 sets × 8 ways ×
-64 B = 4 KiB**, the largest cache the rules allow. The high associativity absorbs conflict misses
-between the `A`, `B` and `C` streams, whose power-of-two strides otherwise map into the same few sets.
+64 B = 4 KiB**, the largest cache the rules allow. The high associativity is aimed at conflict
+misses: in the first layer, consecutive rows of `B` and `C` are 512 B apart (`N = 128` floats), so
+the row segments of one strip fall into the same few sets.
 
 ## Repository layout
 
@@ -150,7 +160,8 @@ between the `A`, `B` and `C` streams, whose power-of-two strides otherwise map i
 
 ## Build and run
 
-Parts 1 and 2 only need `g++`, `gcc`, `python3` and `valgrind`:
+Parts 1 and 2 only need `make`, `g++`, `gcc`, `python3`, `valgrind` and `git` (the judges compare
+outputs with `git diff --no-index`):
 
 ```bash
 make judge-1      # Tree-PLRU vs. reference traces (also builds csim_cpp for Part 2)
@@ -171,7 +182,8 @@ cd /workspace && make judge-3
 ## What I learned
 
 - Why replacement policy, associativity and data layout have to be designed *together*. The
-  transpose trick of steering PLRU only works because the hardware policy is known.
+  transpose trick of steering replacement only works because the policy is deterministic and
+  known (LRU or PLRU), not random.
 - Reasoning about set-index aliasing (`addr >> idx_shift & (sets − 1)`) caused by power-of-two
   strides.
 - Register-tiling a GEMM for a vector ISA while balancing instruction count against miss count.
