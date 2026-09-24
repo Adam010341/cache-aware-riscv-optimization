@@ -74,7 +74,7 @@ cache_sim_t::cache_sim_t(const cache_sim_t& rhs)
   memcpy(tags, rhs.tags, sets*ways*sizeof(uint64_t));
 
   plru_tree = new uint8_t[sets*ways];
-  memcpy(tags, rhs.plru_tree, sets*ways);
+  memcpy(plru_tree, rhs.plru_tree, sets*ways);
 }
 
 cache_sim_t::~cache_sim_t()
