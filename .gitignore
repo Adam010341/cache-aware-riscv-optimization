@@ -1,0 +1,28 @@
+# Build artifacts
+1_cachesim/csim_cpp
+2_transpose/csim_cpp
+2_transpose/trans-driver32
+2_transpose/trans-driver64
+2_transpose/evaluate
+3_mlp/mlp_original
+3_mlp/mlp_improved
+
+# Traces and judge scratch files
+*.trace
+*hitf32
+*hitf64
+.csim_results
+.marker
+logs/
+ans.txt
+out.txt
+
+# Generated outputs (keep the directories)
+*/output/*
+2_transpose/answer/*
+3_mlp/answer/*
+!.gitkeep
+
+# Editor / Python
+.vscode/
+__pycache__/
