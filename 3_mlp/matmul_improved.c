@@ -36,7 +36,7 @@ void matmul(float *A, float *B, float *C, int M, int K, int N) {
                     __riscv_vse32_v_f32m4(&C[(i+2)*N+j],vc2,vl);
                     __riscv_vse32_v_f32m4(&C[(i+3)*N+j],vc3,vl);
                 }
-                for(;i<MIN(m0+16,M)-4;i++){
+                for(;i<MIN(m0+16,M);i++){
                     vfloat32m4_t vc0=__riscv_vle32_v_f32m4(&C[(i+0)*N+j],vl);
                     for(int k=k0;k<MIN(k0+16,K);k++){
                         vfloat32m4_t vb=__riscv_vle32_v_f32m4(&B[k*N+j],vl);
