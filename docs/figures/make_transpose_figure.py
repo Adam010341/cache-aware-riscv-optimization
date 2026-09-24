@@ -8,6 +8,9 @@ Python port of the Tree-PLRU cache in 1_cachesim/cachesim.cc, using the geometry
 that the replay reproduces the miss counts in the README (1,152 / 272 for 32x32,
 4,608 / 1,344 for 64x64), then draws the cache-set contents it observes.
 
+It also checks, and prints, what the `l = B[..][..]` touch loads are worth by replaying
+the snippet without them (the README quotes these numbers).
+
 Usage (from the repository root; needs matplotlib):
 
     python3 docs/figures/make_transpose_figure.py
@@ -30,6 +33,9 @@ OUT = Path(__file__).with_name("transpose-quadrants.png")
 
 SETS, WAYS, LINE = 16, 2, 32  # evaluate.c: ./csim_cpp -S 16 -W 2 -B 32
 README_MISSES = {32: (1152, 272), 64: (4608, 1344)}  # README "Results": (baseline, mine)
+# Misses with the touch loads of the given steps removed (quoted in the README, Part 2).
+TOUCH_ABLATION = {32: {(1, 3): 272, (2,): 272, (1, 2, 3): 272},
+                  64: {(1, 3): 1344, (2,): 1544, (1, 2, 3): 1544}}
 
 
 class TreePLRU:
@@ -74,7 +80,7 @@ def bases(n):
     return a_base, a_base + max(n * n * 4, 4096)
 
 
-def snippet_accesses(n, step2_touches=True):
+def snippet_accesses(n):
     """The A/B accesses of 2_transpose/snippet.c in program order.
 
     Yields (block, step, k, op, matrix, row, col); op is "L" (load), "S" (store) or
@@ -98,10 +104,9 @@ def snippet_accesses(n, step2_touches=True):
                     yield blk, 2, k, "L", "A", i + 4 + r, k
                 for c in range(4):
                     yield blk, 2, k, "S", "B", k, i + 4 + c
-                if step2_touches:
-                    r, c = {j: (j + 2, i + 4), j + 1: (j + 3, i + 4),
-                            j + 2: (j + 4, i), j + 3: (j + 5, i)}[k]
-                    yield blk, 2, k, "T", "B", r, c
+                r, c = {j: (j + 2, i + 4), j + 1: (j + 3, i + 4),
+                        j + 2: (j + 4, i), j + 3: (j + 5, i)}[k]
+                yield blk, 2, k, "T", "B", r, c
                 for c in range(4):
                     yield blk, 2, k, "S", "B", k + 4, i + c
             for k in range(i + 4, i + 8):  # Step 3: for(k=i+4;k<i+8;k++)
@@ -110,6 +115,11 @@ def snippet_accesses(n, step2_touches=True):
                 for op, r, c in (("S", j + 4, k), ("S", j + 5, k), ("T", j + 4, k),
                                  ("S", j + 6, k), ("T", j + 5, k), ("S", j + 7, k)):
                     yield blk, 3, k, op, "B", r, c
+
+
+def without_touches(accesses, steps):
+    """Drop the `l = B[..][..]` loads of the given steps."""
+    return (a for a in accesses if not (a[3] == "T" and a[1] in steps))
 
 
 def naive_accesses(n):
@@ -157,9 +167,22 @@ for n, (naive, mine) in README_MISSES.items():
     per_step = replay(n, snippet_accesses(n))[1]
     for bi in range(0, n, 8):
         for bj in range(0, n, 8):
+            got = [per_step[(bi, bj), s] for s in (1, 2, 3)]
             if bi != bj:
-                got = [per_step[(bi, bj), s] for s in (1, 2, 3)]
                 assert got == [8, 8, 0], (n, bi, bj, got)
+            else:  # diagonal blocks: A and B share sets, so some lines miss again
+                assert sum(got) > 16, (n, bi, got)
+    for steps, expected in TOUCH_ABLATION[n].items():
+        got = replay(n, without_touches(snippet_accesses(n), steps))[0].misses
+        assert got == expected, (n, steps, got)
+
+# 64x64, off the diagonal: every Step 2 miss on B row k+4 evicts row k, which is finished.
+_cache, _evicted_rows = TreePLRU(), []
+for (bi, bj), step, k, op, m, r, c in snippet_accesses(64):
+    hit, victim = _cache.access(addr(64, m, r, c))
+    if bi != bj and step == 2 and m == "B" and r == k + 4 and not hit:
+        _evicted_rows.append(b_row_of(64, victim) - k)
+assert len(_evicted_rows) == 56 * 4 and set(_evicted_rows) == {0}
 
 # Representative off-diagonal block of the 64x64 case; set s holds B rows j, j+2, j+4, j+6.
 N, BI, BJ = 64, 16, 8
@@ -187,7 +210,7 @@ assert rel(miss4["victim"]) == "row j" and miss4["k"] == BJ
 assert rel(miss6["victim"]) == "row j+2" and miss6["k"] == BJ + 2
 assert not any(not e["hit"] for e in ev if e["step"] == 3)
 # Counterfactual: drop the four `l = B[..][..]` touches of Step 2.
-_, _, ev_nt = replay(N, snippet_accesses(N, step2_touches=False), watch=((BI, BJ), S))
+_, _, ev_nt = replay(N, without_touches(snippet_accesses(N), (2,)), watch=((BI, BJ), S))
 miss4_nt = next(e for e in ev_nt if e["step"] == 2 and not e["hit"] and e["row"] == BJ + 4)
 assert rel(miss4_nt["victim"]) == "row j+2"
 
@@ -420,3 +443,6 @@ text(sx0, sy + 262,
 
 fig.savefig(OUT, dpi=100, facecolor=BG)
 print(f"wrote {OUT} ({W}x{H}px); replay matches README miss counts {README_MISSES}")
+for n, rows in TOUCH_ABLATION.items():
+    print(f"{n}x{n}: {README_MISSES[n][1]} misses with all touch loads; "
+          + "; ".join(f"without Step {'/'.join(map(str, k))} touches: {v}" for k, v in rows.items()))
