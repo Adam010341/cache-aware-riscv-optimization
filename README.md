@@ -40,6 +40,48 @@ binary tree of direction bits, stored as a heap-ordered array (`node 1` = root, 
 - **On a miss**, walk from the root to a leaf, following each bit and flipping it on the way down.
   The leaf reached is the victim way.
 
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 22, "rankSpacing": 38}}}%%
+flowchart TB
+    subgraph hit["Hit on way 3: update_tree_on_hit()"]
+        direction TB
+        h1(["node 1<br/>bit := 0"])
+        h2(["node 2<br/>unchanged"])
+        h3(["node 3<br/>bit := 0"])
+        h4["way 0"]
+        h5["way 1"]
+        h6["way 2"]
+        h7["way 3<br/>hit"]
+        h1 -->|"0"| h2
+        h1 ==>|"1"| h3
+        h2 -->|"0"| h4
+        h2 -->|"1"| h5
+        h3 -->|"0"| h6
+        h3 ==>|"1"| h7
+    end
+    subgraph miss["Miss on a cold set: victimize()"]
+        direction TB
+        m1(["node 1<br/>bit 0 → 1"])
+        m2(["node 2<br/>bit 0 → 1"])
+        m3(["node 3<br/>bit 0"])
+        m4["way 0<br/>victim"]
+        m5["way 1"]
+        m6["way 2"]
+        m7["way 3"]
+        m1 ==>|"0"| m2
+        m1 -->|"1"| m3
+        m2 ==>|"0"| m4
+        m2 -->|"1"| m5
+        m3 -->|"0"| m6
+        m3 -->|"1"| m7
+    end
+```
+
+<sub>One 4-way set, as in public testcase 2 (the code takes any power-of-two `ways`); bit 0 points
+to child `2n`, bit 1 to `2n+1`. A miss follows the bits from the root and flips each one (from the
+all-zero start it evicts way 0), and a hit points every parent on its path away from the accessed
+way.</sub>
+
 This costs `ways − 1` bits of state per set, and each update touches O(log ways) nodes. It follows
 the specification exactly, including the rule that invalid ways are *not* preferred. The same
 `cachesim.{h,cc}` is dropped into Spike's source tree and reused by Parts 2 and 3.
@@ -60,6 +102,13 @@ into four 4×4 quadrants:
 2. For each of the four `B` rows, swap the parked values out to their final quadrant and bring in
    `A`'s bottom-left column. Every line loaded from `B` is used completely before it can be evicted.
 3. Transpose the bottom-right quadrant directly.
+
+![One 8×8 block of the blocked transpose in three steps, and the contents of one 2-way cache set as the steps run](docs/figures/transpose-quadrants.png)
+
+<sub>The three `k`-loops of `snippet.c` on one 8×8 block. The bottom half comes from replaying the
+snippet's accesses through a Python port of the Part 1 cache
+([`make_transpose_figure.py`](docs/figures/make_transpose_figure.py)), which reproduces the miss
+counts in the table above.</sub>
 
 The `l = B[..][..]` reads are deliberate extra accesses. They **touch a line to steer the PLRU tree**,
 so the next miss evicts the line I have finished with rather than one I still need. This only
@@ -93,6 +142,7 @@ between the `A`, `B` and `C` streams, whose power-of-two strides otherwise map i
 ├── 1_cachesim/     # ★ cachesim.h / cachesim.cc — Tree-PLRU (C++), trace-driven judge
 ├── 2_transpose/    # ★ snippet.c — blocked transpose; Valgrind Lackey → csim → miss count
 ├── 3_mlp/          # ★ matmul_improved.c, dc_config.py — RVV GEMM + cache geometry
+├── docs/figures/   # README figure and the script that draws it
 └── Makefile        # make judge-{1,2,3,all}
 ```
 
