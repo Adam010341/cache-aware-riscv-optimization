@@ -215,10 +215,10 @@ miss4_nt = next(e for e in ev_nt if e["step"] == 2 and not e["hit"] and e["row"]
 assert rel(miss4_nt["victim"]) == "row j+2"
 
 SNAPSHOTS = [
-    ("End of Step 1", snapshot(end1), None, "Both lines were\nfilled in Step 1."),
-    ("Step 2, k = j", snapshot(miss4), 0, "Touch row j+2;\nrow j+4 then evicts\nrow j (finished)."),
-    ("Step 2, k = j+2", snapshot(miss6), 1, "Touch row j+4;\nrow j+6 then evicts\nrow j+2 (finished)."),
-    ("Step 3", snapshot(end3), None, "Rows j+4, j+6 still\ncached: no misses."),
+    ("End of Step 1", snapshot(end1), None, ""),
+    ("Step 2, k = j", snapshot(miss4), 0, "evicts row j"),
+    ("Step 2, k = j+2", snapshot(miss6), 1, "evicts row j+2"),
+    ("Step 3", snapshot(end3), None, "no misses"),
 ]
 
 # --------------------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def tint(hex_color, amount):
     return "#" + "".join(f"{round(255 - (255 - v) * amount):02x}" for v in rgb)
 
 
-W, H = 1200, 950
+W, H = 1200, 800
 fig = plt.figure(figsize=(W / 100, H / 100), dpi=100, facecolor=BG)
 ax = fig.add_axes([0, 0, 1, 1])
 ax.set_xlim(0, W)
@@ -318,15 +318,13 @@ def arrow(p, q, color, rad=0.0, lw=2.2, style="-|>", ls="-"):
 
 # ---- header ---------------------------------------------------------------------------
 text(24, 18, "How snippet.c transposes one 8×8 block (B = Aᵀ)", size=19, weight="bold")
-text(24, 52, "Each row of a block is one 32-byte cache line (8 ints). "
-     "Quadrants: 11 top-left, 12 top-right, 21 bottom-left, 22 bottom-right.",
-     size=12, color=MUTED)
+text(24, 52, "One block row = one 32-byte cache line.", size=12, color=MUTED)
 
 lx, ly = 24, 86
-for styles, label in ((("final",), "written to its final place"),
-                      (("parked",), "parked in B's top-right, moved in Step 2"),
-                      (("read_blue", "read_orange"), "read in this step"),
-                      (("done",), "finished in an earlier step")):
+for styles, label in ((("final",), "final"),
+                      (("parked",), "parked"),
+                      (("read_blue", "read_orange"), "read"),
+                      (("done",), "done")):
     for n_sw, style in enumerate(styles):
         st = STYLE[style]
         ax.add_patch(Rectangle((lx, ly), 22, 16, facecolor=st["face"], edgecolor=st["edge"],
@@ -336,7 +334,7 @@ for styles, label in ((("final",), "written to its final place"),
     lx += 2 + width(label, 11.5) + 30
 
 # ---- step panels ----------------------------------------------------------------------
-PX, PY, PW, PH, GAP = 20, 122, 373, 372, 20
+PX, PY, PW, PH, GAP = 20, 122, 373, 300, 20
 CELL = 17
 steps = [
     dict(title="Step 1", code="for (k = i; k < i+4; k++)",
@@ -345,28 +343,21 @@ steps = [
                         "21": ("$A_{21}$", 0), "22": ("$A_{22}$", 0)}),
          b=dict(quads={"11": "final", "12": "parked"},
                 labels={"11": ("$A_{11}^{T}$", 0), "12": ("$A_{12}^{T}$", 0)}),
-         body="Load row k of A (one line).\n"
-              "Left half → column k of $B_{11}$.\n"
-              "Right half → column k of $B_{12}$,\n"
-              "parked in the same B lines\n(rows j … j+3)."),
+         body="Left half → $B_{11}$.\nRight half parked in $B_{12}$."),
     dict(title="Step 2", code="for (k = j; k < j+4; k++)",
          a=dict(quads={"11": "done", "12": "done", "21": "read_blue"},
                 labels={"21": ("$A_{21}$", 0), "22": ("$A_{22}$", 0)}),
          b=dict(quads={"11": "done", "12": "final", "21": "final"},
                 labels={"11": ("$A_{11}^{T}$", 0), "12": ("$A_{21}^{T}$", -12),
                         "21": ("$A_{12}^{T}$", 12)}),
-         body="Row k of $B_{12}$: read the parked\n"
-              "values, overwrite with column k\nof $A_{21}$. "
-              "Then write the parked\nvalues into row k+4 of $B_{21}$.",
+         body="$A_{21}$ → $B_{12}$.\nParked values → $B_{21}$.",
          swap=True),
     dict(title="Step 3", code="for (k = i+4; k < i+8; k++)",
          a=dict(quads={"11": "done", "12": "done", "21": "done", "22": "read_blue"},
                 labels={"22": ("$A_{22}$", 0)}),
          b=dict(quads={"11": "done", "12": "done", "21": "done", "22": "final"},
                 labels={"22": ("$A_{22}^{T}$", 0)}),
-         body="Row k of $A_{22}$ → column k of $B_{22}$.\n"
-              "A rows i+4 … i+7 and B rows\n"
-              "j+4 … j+7 were already loaded\nin Step 2."),
+         body="$A_{22}$ → $B_{22}$.\nAll lines already cached."),
 ]
 for n_step, st in enumerate(steps):
     x0 = PX + n_step * (PW + GAP)
@@ -387,10 +378,8 @@ for n_step, st in enumerate(steps):
 # ---- bottom panel: why the order matters ----------------------------------------------
 BY, BH = PY + PH + 20, H - (PY + PH + 20) - 20
 panel(PX, BY, W - 2 * PX, BH)
-text(PX + 16, BY + 14, "Why this order avoids conflict misses", size=15, weight="bold")
-text(PX + 16, BY + 40, "64×64 case, cache of 16 sets × 2 ways × 32 B. "
-     "Replayed with the Tree-PLRU from Part 1 on an off-diagonal block.",
-     size=12, color=MUTED)
+text(PX + 16, BY + 14, "Cache set s, 64×64", size=15, weight="bold")
+text(PX + 16, BY + 40, "16 sets × 2 ways × 32 B, Tree-PLRU replay", size=12, color=MUTED)
 
 # left: row -> set mapping of the B block
 rx, ry, rw, rh = PX + 108, BY + 104, 150, 20
@@ -403,15 +392,12 @@ for r in range(8):
     text(rx + rw + 8, ry + r * (rh + 3) + rh / 2, "set s" if r % 2 == 0 else "set s+8",
          size=11, family=MONO, ha="left", va="center", color=MUTED)
 text(PX + 16, ry + 8 * (rh + 3) + 12,
-     "A 64-int row is 256 B, so rows two apart\n"
-     "share a set. The 8 rows of a B block get\n"
-     "2 sets × 2 ways = room for 4 lines, so only\n"
-     "half of the block can be cached at a time.",
+     "Rows two apart share a set:\nonly 4 of 8 rows fit.",
      size=12, linespacing=1.45)
 
 # right: contents of set s over time, straight from the replay
 sx0, sy = PX + 400, BY + 92
-text(sx0, sy - 12, "Set s (B rows j, j+2, j+4, j+6) as the steps run", size=12,
+text(sx0, sy - 12, "Set s over time", size=12,
      va="bottom")
 slot_w, slot_h, snap_gap = 82, 30, 18
 for n_snap, (title, ways, new_way, note) in enumerate(SNAPSHOTS):
@@ -431,15 +417,7 @@ for n_snap, (title, ways, new_way, note) in enumerate(SNAPSHOTS):
         arrow((x + 2 * slot_w - 2, sy + 32 + slot_h / 2),
               (x + 2 * slot_w + snap_gap - 2, sy + 32 + slot_h / 2), MUTED, lw=1.4)
 
-text(sx0, sy + 180,
-     "Why the touch: at k = j, l = B[j+2][i+4] makes row j+2 the most recently used\n"
-     "line. Without it, row j (just written) would be the most recent, and row j+4\n"
-     "would evict row j+2, which k = j+2 still needs.",
-     size=12, linespacing=1.45)
-text(sx0, sy + 262,
-     "Result: every off-diagonal block misses exactly once per line:\n"
-     "8 misses in Step 1, 8 in Step 2 and 0 in Step 3, for both 32×32 and 64×64.",
-     size=12, linespacing=1.45, weight="bold")
+text(sx0, sy + 130, "Misses per off-diagonal block: 8 / 8 / 0", size=12, weight="bold")
 
 fig.savefig(OUT, dpi=100, facecolor=BG)
 print(f"wrote {OUT} ({W}x{H}px); replay matches README miss counts {README_MISSES}")
