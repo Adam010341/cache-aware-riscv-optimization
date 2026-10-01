@@ -5,9 +5,9 @@
 ![C](https://img.shields.io/badge/kernels-C%20%2B%20RVV-00599C?logo=c&logoColor=white)
 ![Valgrind](https://img.shields.io/badge/traces-Valgrind%20Lackey-8b0000)
 
-Cache optimisation from both sides: a Tree-PLRU replacement policy in the
-[Spike](https://github.com/riscv-software-src/riscv-isa-sim) RISC-V simulator's L1 data-cache model,
-and a cache-blocked matrix transpose plus an RVV-vectorised, tiled MLP GEMM kernel.
+I added a Tree-PLRU replacement policy to the L1 data-cache model in the
+[Spike](https://github.com/riscv-software-src/riscv-isa-sim) RISC-V simulator. I also wrote a
+cache-blocked matrix transpose and a tiled MLP GEMM kernel using RVV.
 
 > Lab 3 of *Computer Organization* (NCKU CSIE, Spring 2026). See the [lab series](#lab-series) below.
 
@@ -18,9 +18,9 @@ Measured with the provided local judge. The transpose runs on a 16-set, 2-way, 3
 
 | Part | Metric | Baseline | Mine | Change |
 |------|--------|---------:|-----:|-------:|
-| 1. Tree-PLRU | Public testcases matching the reference trace | — | **3 / 3** | exact match |
-| 2. Transpose 32×32 | D-cache misses | 1,152 | **272** | **−76 %** |
-| 2. Transpose 64×64 | D-cache misses | 4,608 | **1,344** | **−71 %** |
+| 1. Tree-PLRU | Public testcases matching the reference trace | n/a | 3 / 3 | exact match |
+| 2. Transpose 32×32 | D-cache misses | 1,152 | 272 | −76 % |
+| 2. Transpose 64×64 | D-cache misses | 4,608 | 1,344 | −71 % |
 
 Part 3 (MLP) runs on Spike with the customised cache model and needs the course Docker image.
 
@@ -30,9 +30,9 @@ Spike's cache model picks victims with an LFSR (pseudo-random). I replaced it wi
 tree of direction bits, stored as a heap-ordered array (`node 1` = root, children `2n` and `2n+1`,
 leaves `ways … 2·ways−1`).
 
-- **Hit:** walk from the leaf to the root, setting each parent to point away from the accessed
+- Hit: walk from the leaf to the root, setting each parent to point away from the accessed
   child: `tree[node/2] = (node is left child)`.
-- **Miss:** walk from the root to a leaf, following each bit and flipping it on the way down. The
+- Miss: walk from the root to a leaf, following each bit and flipping it on the way down. The
   leaf reached is the victim way.
 
 ```mermaid
@@ -75,7 +75,7 @@ flowchart TB
 <sub>One 4-way set, as in public testcase 2. Bit 0 points to child `2n`, bit 1 to `2n+1`.</sub>
 
 Each set has `ways − 1` direction bits and each update touches O(log ways) nodes. Invalid ways are
-not preferred, as the specification requires. The same `cachesim.{h,cc}` is used by Parts 2 and 3.
+not preferred, as the spec says. The same `cachesim.{h,cc}` is used by Parts 2 and 3.
 
 Files: [`cachesim.h`](1_cachesim/cachesim.h), [`cachesim.cc`](1_cachesim/cachesim.cc)
 
@@ -84,11 +84,11 @@ Files: [`cachesim.h`](1_cachesim/cachesim.h), [`cachesim.cc`](1_cachesim/cachesi
 `B = Aᵀ` for 32×32 and 64×64 `int32` matrices, both 4 KiB-aligned. The cache is tiny, so `A[i]` and
 `B[i]` land in the same sets and rows a few apart evict each other.
 
-[`snippet.c`](2_transpose/snippet.c) works on **8×8 blocks** (one 32 B line = 8 ints), split into
+[`snippet.c`](2_transpose/snippet.c) works on 8×8 blocks (one 32 B line = 8 ints), split into
 four 4×4 quadrants:
 
 1. Read the top four rows of the `A` block. Transpose the left half into its final place in `B` and
-   **park** the right half in `B`'s top-right quadrant, which is already in cache.
+   park the right half in `B`'s top-right quadrant, which is already in cache.
 2. For each of the four `B` rows, swap the parked values out to their final quadrant and bring in
    `A`'s bottom-left column. Off the diagonal, every line of `A` and `B` is loaded once. Diagonal
    blocks take extra misses.
@@ -99,11 +99,11 @@ four 4×4 quadrants:
 <sub>The bottom half is a replay of the snippet's accesses through a Python port of the Part 1 cache
 ([`make_transpose_figure.py`](docs/figures/make_transpose_figure.py)).</sub>
 
-The `l = B[..][..]` reads are deliberate extra accesses that **touch a line to steer replacement**.
+The `l = B[..][..]` reads are deliberate extra accesses. They touch a line to steer replacement.
 In the 64×64 case, each of the four reads in Step 2 makes the `B` row I still need the most recently
 used line in its set, so the next miss evicts the row I have finished with. In the Python replay,
 removing those four reads raises the 64×64 count from 1,344 to 1,544 misses; 32×32 stays at 272.
-This relies on a deterministic policy (LRU or PLRU) and would not work with Spike's default random
+It needs a deterministic policy (LRU or PLRU) and does nothing under Spike's default random
 replacement.
 
 The code is limited to the 12 provided scalar locals (`t0–t7, i, j, k, l`).
@@ -115,15 +115,15 @@ A two-layer MLP (`784 → 128 → 10`, 300 samples) on Spike. The score is `Inst
 
 [`matmul_improved.c`](3_mlp/matmul_improved.c):
 
-- **Vectorise along N.** Each `B[k][j : j+vl]` row segment is loaded once per group of four `C` rows
+- Vectorise along N. Each `B[k][j : j+vl]` row segment is loaded once per group of four `C` rows
   and multiplied into all four rows with `vfmacc.vf`. The 4 × `vl` output tile stays in vector
   registers (`LMUL = 4`, 16 vregs) for a 16-deep block of `K`.
-- **Loop tiling.** Blocks of 16 rows of `A` and 16 values of `K`, so each 16 × `vl` strip of `B` is
+- Loop tiling. Blocks of 16 rows of `A` and 16 values of `K`, so each 16 × `vl` strip of `B` is
   reused by every row of the block.
-- **Scalar-row tail loop** for `M % 4`.
+- Scalar-row tail loop for `M % 4`.
 
-[`dc_config.py`](3_mlp/dc_config.py) sets the data-cache geometry: **8 sets × 8 ways × 64 B =
-4 KiB**, the largest the rules allow. In the first layer, consecutive rows of `B` and `C` are 512 B
+[`dc_config.py`](3_mlp/dc_config.py) sets the data-cache geometry: 8 sets × 8 ways × 64 B =
+4 KiB, the largest the rules allow. In the first layer, consecutive rows of `B` and `C` are 512 B
 apart (`N = 128` floats), so the row segments of one strip fall into the same few sets. The high
 associativity is aimed at those conflict misses.
 
